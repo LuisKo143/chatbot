@@ -1,120 +1,157 @@
 <!doctype html>
 <html lang="de">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>WebLLM Chatbot</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 0; display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
-    header { padding: 12px 16px; box-shadow: 0 1px 0 rgba(0,0,0,.1); background: #f5f5f5; }
-    #log { padding: 16px; overflow-y: auto; }
-    .msg { margin-bottom: 12px; }
-    .user { font-weight: bold; color: #0066cc; }
-    .assistant { font-weight: bold; color: #009933; }
-    form { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 12px 16px; border-top: 1px solid #ddd; }
-    textarea { resize: vertical; min-height: 60px; padding: 10px; }
-    button { padding: 10px 16px; border-radius: 8px; border: none; background: #0066cc; color: white; font-weight: bold; cursor: pointer; }
-    button:disabled { opacity: 0.6; cursor: wait; }
-  </style>
-  <script type="importmap">
-  {
-    "imports": {
-      "webllm": "https://esm.run/@mlc-ai/web-llm"
-    }
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Freier Chat + Bildgenerator</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin:0; display:grid; grid-template-rows:auto 1fr auto; height:100vh;}
+  header { padding:12px 16px; box-shadow:0 1px 0 rgba(0,0,0,.1); background:#f5f5f5; display:flex; justify-content:space-between; align-items:center;}
+  main { display:flex; overflow:hidden;}
+  #chat-section,#image-section { flex:1; padding:16px; overflow-y:auto; border-right:1px solid #ddd;}
+  #image-section { border-right:none;}
+  .msg { margin-bottom:12px; }
+  .user { font-weight:bold; color:#0066cc; }
+  .assistant { font-weight:bold; color:#009933; }
+  form { display:grid; grid-template-columns:1fr auto; gap:8px; padding:12px 16px; border-top:1px solid #ddd;}
+  textarea { resize: vertical; min-height:60px; padding:10px; }
+  button { padding:10px 16px; border-radius:8px; border:none; background:#0066cc; color:white; font-weight:bold; cursor:pointer;}
+  button:disabled { opacity:0.6; cursor:wait;}
+  #image-output img { max-width:100%; margin-bottom:12px; border-radius:8px; border:1px solid #ccc;}
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "webllm":"https://esm.run/@mlc-ai/web-llm",
+    "websd":"https://esm.run/@mlc-ai/web-sd" 
   }
-  </script>
+}
+</script>
 </head>
 <body>
-  <header>
-    <strong>WebLLM Chatbot (alles lokal im Browser)</strong>
+
+<header>
+  <strong>Freier Chat & Bildgenerator</strong>
+  <div>
     <select id="model">
-      <option value="Llama-3-8B-Instruct-q4f16_1-MLC">Llama 3 8B (quantisiert)</option>
-      <option value="Phi-3-mini-4k-instruct-q4f16_1-MLC">Phi-3 Mini (schneller, kleiner)</option>
-      <option value="Gemma-2-2B-it-q4f16_1-MLC">Gemma 2B (Google, leichtgewichtig)</option>
+      <option value="Llama-3-7B-Base-MLC">Llama 3 7B Base</option>
+      <option value="Phi-3-mini-Base-4k-MLC">Phi-3 Mini Base</option>
+      <option value="Gemma-2-2B-Base-MLC">Gemma 2B Base</option>
     </select>
-  </header>
+  </div>
+</header>
 
-  <main id="log"></main>
+<main>
+  <div id="chat-section">
+    <div id="log"></div>
+    <form id="composer">
+      <textarea id="prompt" placeholder="Frag mich etwas…" required></textarea>
+      <button id="send">Senden</button>
+    </form>
+  </div>
+  <div id="image-section">
+    <div>
+      <textarea id="image-prompt" placeholder="Bildbeschreibung…"></textarea>
+      <button id="gen-image">Bild generieren</button>
+    </div>
+    <div id="image-output"></div>
+  </div>
+</main>
 
-  <form id="composer">
-    <textarea id="prompt" placeholder="Frag mich etwas…" required></textarea>
-    <button id="send">Senden</button>
-  </form>
+<script type="module">
+import * as webllm from "webllm";
+import * as websd from "websd";
 
-  <script type="module">
-    import * as webllm from "webllm";
+const log = document.getElementById("log");
+const form = document.getElementById("composer");
+const promptEl = document.getElementById("prompt");
+const modelSel = document.getElementById("model");
+const sendBtn = document.getElementById("send");
 
-    const log = document.getElementById("log");
-    const form = document.getElementById("composer");
-    const promptEl = document.getElementById("prompt");
-    const modelSel = document.getElementById("model");
-    const sendBtn = document.getElementById("send");
+let engine;
+let chatHistory = [];
 
-    let engine;
-    let chatHistory = [];
+function addMsg(role,text){
+  const div=document.createElement("div");
+  div.className="msg";
+  div.innerHTML=`<span class="${role}">${role==="user"?"Du":"Bot"}:</span> ${text}`;
+  log.appendChild(div);
+  log.scrollTop=log.scrollHeight;
+}
 
-    function addMsg(role, text) {
-      const div = document.createElement("div");
-      div.className = "msg";
-      div.innerHTML = `<span class="${role}">${role === "user" ? "Du" : "Bot"}:</span> ${text}`;
-      log.appendChild(div);
-      log.scrollTop = log.scrollHeight;
-    }
+async function initModel(){
+  const modelId=modelSel.value;
+  addMsg("assistant",`⏳ Lade Base-Modell: ${modelId} …`);
+  engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:info=>console.log("Init:",info)});
+  chatHistory=[];
+  addMsg("assistant",`✅ Modell "${modelId}" bereit!`);
+}
 
-    async function initModel() {
-      const modelId = modelSel.value;
-      addMsg("assistant", `⏳ Lade Modell: ${modelId} …`);
-      engine = await webllm.CreateMLCEngine(modelId, { initProgressCallback: (info) => {
-        console.log("Init:", info);
-      }});
-      chatHistory = [];
-      addMsg("assistant", `✅ Modell "${modelId}" bereit!`);
-    }
+modelSel.addEventListener("change",()=>initModel());
 
-    modelSel.addEventListener("change", () => {
-      initModel();
-    });
+form.addEventListener("submit",async e=>{
+  e.preventDefault();
+  const userText=promptEl.value.trim();
+  if(!userText||!engine)return;
+  promptEl.value="";
+  addMsg("user",userText);
+  sendBtn.disabled=true;
 
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const userText = promptEl.value.trim();
-      if (!userText || !engine) return;
-      promptEl.value = "";
-      addMsg("user", userText);
-      sendBtn.disabled = true;
-
-      const replyChunks = [];
-      await engine.chat.completions.create({
-        messages: [...chatHistory, { role: "user", content: userText }],
-        stream: true,
-      }).then(async (stream) => {
-        for await (const part of stream) {
-          const delta = part.choices[0]?.delta?.content || "";
-          if (delta) {
-            replyChunks.push(delta);
-            addOrUpdateAssistant(replyChunks.join(""));
-          }
-        }
-      });
-
-      const fullReply = replyChunks.join("");
-      chatHistory.push({ role: "user", content: userText });
-      chatHistory.push({ role: "assistant", content: fullReply });
-      sendBtn.disabled = false;
-    });
-
-    function addOrUpdateAssistant(text) {
-      let last = log.lastElementChild;
-      if (!last || !last.querySelector(".assistant")) {
-        addMsg("assistant", text);
-      } else {
-        last.innerHTML = `<span class="assistant">Bot:</span> ${text}`;
+  const replyChunks=[];
+  await engine.chat.completions.create({
+    messages:[...chatHistory,{role:"user",content:userText}],
+    stream:true
+  }).then(async stream=>{
+    for await(const part of stream){
+      const delta=part.choices[0]?.delta?.content||"";
+      if(delta){
+        replyChunks.push(delta);
+        addOrUpdateAssistant(replyChunks.join(""));
       }
-      log.scrollTop = log.scrollHeight;
     }
+  });
 
-    // Init default model
-    initModel();
-  </script>
+  const fullReply=replyChunks.join("");
+  chatHistory.push({role:"user",content:userText});
+  chatHistory.push({role:"assistant",content:fullReply});
+  sendBtn.disabled=false;
+});
+
+function addOrUpdateAssistant(text){
+  let last=log.lastElementChild;
+  if(!last||!last.querySelector(".assistant")){
+    addMsg("assistant",text);
+  }else{
+    last.innerHTML=`<span class="assistant">Bot:</span> ${text}`;
+  }
+  log.scrollTop=log.scrollHeight;
+}
+
+// Init Chat-Model
+initModel();
+
+// ---------------- Bildgenerator ----------------
+const genBtn=document.getElementById("gen-image");
+const imgPrompt=document.getElementById("image-prompt");
+const imgOutput=document.getElementById("image-output");
+
+let sdEngine;
+async function initSD(){
+  sdEngine=await websd.CreateEngine("stable-diffusion-1.5-base",{progressCallback:info=>console.log("SD Init:",info)});
+}
+initSD();
+
+genBtn.addEventListener("click",async()=>{
+  const prompt=imgPrompt.value.trim();
+  if(!prompt||!sdEngine)return;
+  genBtn.disabled=true;
+  const imgData=await sdEngine.generate({prompt,width:512,height:512,steps:20});
+  const imgEl=document.createElement("img");
+  imgEl.src=imgData; // base64
+  imgOutput.prepend(imgEl);
+  genBtn.disabled=false;
+});
+</script>
+
 </body>
 </html>
