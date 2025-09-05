@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Freier Chat + Bildgenerator</title>
+<title>Freier Text+Bild Chatbot</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin:0; display:grid; grid-template-rows:auto 1fr auto; height:100vh;}
-  header { padding:12px 16px; box-shadow:0 1px 0 rgba(0,0,0,.1); background:#f5f5f5; display:flex; justify-content:space-between; align-items:center;}
+  body { font-family: system-ui,sans-serif; margin:0; display:grid; grid-template-rows:auto 1fr auto; height:100vh;}
+  header { padding:12px 16px; background:#f5f5f5; display:flex; justify-content:space-between; align-items:center;}
   main { display:flex; overflow:hidden;}
   #chat-section,#image-section { flex:1; padding:16px; overflow-y:auto; border-right:1px solid #ddd;}
   #image-section { border-right:none;}
@@ -23,7 +23,7 @@
 {
   "imports": {
     "webllm":"https://esm.run/@mlc-ai/web-llm",
-    "websd":"https://esm.run/@mlc-ai/web-sd" 
+    "websd":"https://esm.run/@mlc-ai/web-sd"
   }
 }
 </script>
@@ -31,12 +31,11 @@
 <body>
 
 <header>
-  <strong>Freier Chat & Bildgenerator</strong>
+  <strong>Freier Text+Bild Chatbot</strong>
   <div>
     <select id="model">
       <option value="Llama-3-7B-Base-MLC">Llama 3 7B Base</option>
       <option value="Phi-3-mini-Base-4k-MLC">Phi-3 Mini Base</option>
-      <option value="Gemma-2-2B-Base-MLC">Gemma 2B Base</option>
     </select>
   </div>
 </header>
@@ -45,15 +44,11 @@
   <div id="chat-section">
     <div id="log"></div>
     <form id="composer">
-      <textarea id="prompt" placeholder="Frag mich etwas…" required></textarea>
+      <textarea id="prompt" placeholder="Frag mich oder tippe /image …" required></textarea>
       <button id="send">Senden</button>
     </form>
   </div>
   <div id="image-section">
-    <div>
-      <textarea id="image-prompt" placeholder="Bildbeschreibung…"></textarea>
-      <button id="gen-image">Bild generieren</button>
-    </div>
     <div id="image-output"></div>
   </div>
 </main>
@@ -62,14 +57,15 @@
 import * as webllm from "webllm";
 import * as websd from "websd";
 
-const log = document.getElementById("log");
-const form = document.getElementById("composer");
-const promptEl = document.getElementById("prompt");
-const modelSel = document.getElementById("model");
-const sendBtn = document.getElementById("send");
+const log=document.getElementById("log");
+const form=document.getElementById("composer");
+const promptEl=document.getElementById("prompt");
+const modelSel=document.getElementById("model");
+const sendBtn=document.getElementById("send");
+const imgOutput=document.getElementById("image-output");
 
 let engine;
-let chatHistory = [];
+let chatHistory=[];
 
 function addMsg(role,text){
   const div=document.createElement("div");
@@ -81,25 +77,50 @@ function addMsg(role,text){
 
 async function initModel(){
   const modelId=modelSel.value;
-  addMsg("assistant",`⏳ Lade Base-Modell: ${modelId} …`);
-  engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:info=>console.log("Init:",info)});
+  addMsg("assistant",`⏳ Lade Modell: ${modelId} ...`);
+  engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:info=>console.log(info)});
   chatHistory=[];
   addMsg("assistant",`✅ Modell "${modelId}" bereit!`);
 }
 
 modelSel.addEventListener("change",()=>initModel());
+initModel();
 
+// Init SD Engine
+let sdEngine;
+async function initSD(){
+  sdEngine=await websd.CreateEngine("stable-diffusion-1.5-base",{progressCallback:info=>console.log("SD:",info)});
+}
+initSD();
+
+// Chat + Bild-Command Handler
 form.addEventListener("submit",async e=>{
   e.preventDefault();
-  const userText=promptEl.value.trim();
-  if(!userText||!engine)return;
+  const text=promptEl.value.trim();
+  if(!text||!engine)return;
   promptEl.value="";
-  addMsg("user",userText);
+  addMsg("user",text);
   sendBtn.disabled=true;
 
+  // Prüfe auf /image Command
+  if(text.startsWith("/image")){
+    const imgPrompt=text.replace("/image","").trim();
+    addMsg("assistant",`⏳ Generiere Bild: "${imgPrompt}" ...`);
+    if(sdEngine){
+      const imgData=await sdEngine.generate({prompt:imgPrompt,width:512,height:512,steps:20});
+      const imgEl=document.createElement("img");
+      imgEl.src=imgData;
+      imgOutput.prepend(imgEl);
+      addMsg("assistant","✅ Bild generiert!");
+    } else addMsg("assistant","❌ SD Engine nicht bereit.");
+    sendBtn.disabled=false;
+    return;
+  }
+
+  // Normaler Chat
   const replyChunks=[];
   await engine.chat.completions.create({
-    messages:[...chatHistory,{role:"user",content:userText}],
+    messages:[...chatHistory,{role:"user",content:text}],
     stream:true
   }).then(async stream=>{
     for await(const part of stream){
@@ -110,47 +131,17 @@ form.addEventListener("submit",async e=>{
       }
     }
   });
-
   const fullReply=replyChunks.join("");
-  chatHistory.push({role:"user",content:userText});
+  chatHistory.push({role:"user",content:text});
   chatHistory.push({role:"assistant",content:fullReply});
   sendBtn.disabled=false;
 });
 
 function addOrUpdateAssistant(text){
   let last=log.lastElementChild;
-  if(!last||!last.querySelector(".assistant")){
-    addMsg("assistant",text);
-  }else{
-    last.innerHTML=`<span class="assistant">Bot:</span> ${text}`;
-  }
-  log.scrollTop=log.scrollHeight;
+  if(!last||!last.querySelector(".assistant")) addMsg("assistant",text);
+  else last.innerHTML=`<span class="assistant">Bot:</span> ${text}`;
 }
-
-// Init Chat-Model
-initModel();
-
-// ---------------- Bildgenerator ----------------
-const genBtn=document.getElementById("gen-image");
-const imgPrompt=document.getElementById("image-prompt");
-const imgOutput=document.getElementById("image-output");
-
-let sdEngine;
-async function initSD(){
-  sdEngine=await websd.CreateEngine("stable-diffusion-1.5-base",{progressCallback:info=>console.log("SD Init:",info)});
-}
-initSD();
-
-genBtn.addEventListener("click",async()=>{
-  const prompt=imgPrompt.value.trim();
-  if(!prompt||!sdEngine)return;
-  genBtn.disabled=true;
-  const imgData=await sdEngine.generate({prompt,width:512,height:512,steps:20});
-  const imgEl=document.createElement("img");
-  imgEl.src=imgData; // base64
-  imgOutput.prepend(imgEl);
-  genBtn.disabled=false;
-});
 </script>
 
 </body>
