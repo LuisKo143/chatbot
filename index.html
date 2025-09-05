@@ -17,7 +17,7 @@
   .assistant { color:#00ff88; font-weight:bold; }
   form { display:flex; gap:8px; padding:12px; background:#2c2c2c; border-top:1px solid #333; }
   textarea { flex:1; resize: vertical; min-height:60px; padding:10px; border-radius:6px; border:none; background:#333; color:#eee; }
-  button { padding:10px 16px; border-radius:6px; border:none; background:#00aaff; color:#fff; font-weight:bold; cursor:pointer; }
+  button { padding:10px 16px; border-radius:6px; border:none; background:#00aaff; color:#fff; font-weight:bold; cursor:pointer;}
   button:disabled { opacity:0.6; cursor:wait; }
   #image-output { flex:1; overflow-y:auto; padding:16px; display:flex; flex-wrap:wrap; gap:12px; background:#1b1b1b; justify-content:flex-start; }
   #image-output img { max-width:100%; border-radius:8px; border:1px solid #444; }
@@ -52,7 +52,7 @@
     <div id="log"></div>
     <form id="composer">
       <textarea id="prompt" placeholder="Frag mich oder tippe /image ..."></textarea>
-      <button id="send">Senden</button>
+      <button type="submit">Senden</button>
     </form>
   </div>
 
@@ -70,103 +70,106 @@
 import * as webllm from "webllm";
 import * as websd from "websd";
 
-// Chat Setup
-const log = document.getElementById("log");
-const form = document.getElementById("composer");
-const promptEl = document.getElementById("prompt");
-const modelSel = document.getElementById("model");
-const sendBtn = document.getElementById("send");
+document.addEventListener("DOMContentLoaded", async () => {
 
-let engine;
-let chatHistory=[];
+  // ---------------- Chat Setup ----------------
+  const log = document.getElementById("log");
+  const form = document.getElementById("composer");
+  const promptEl = document.getElementById("prompt");
+  const modelSel = document.getElementById("model");
+  const sendBtn = document.getElementById("send");
 
-function addMsg(role,text){
-  const div=document.createElement("div");
-  div.className="msg";
-  div.innerHTML=`<span class="${role}">${role==="user"?"Du":"Bot"}:</span> ${text}`;
-  log.appendChild(div);
-  log.scrollTop=log.scrollHeight;
-}
+  let engine;
+  let chatHistory=[];
 
-async function initModel(){
-  const modelId=modelSel.value;
-  addMsg("assistant",`⏳ Lade Base-Modell: ${modelId} ...`);
-  engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:info=>console.log("Init:",info)});
-  chatHistory=[];
-  addMsg("assistant",`✅ Modell "${modelId}" bereit!`);
-}
-
-modelSel.addEventListener("change",()=>initModel());
-initModel();
-
-// Chat Input
-form.addEventListener("submit", async e=>{
-  e.preventDefault();
-  const text=promptEl.value.trim();
-  if(!text||!engine)return;
-  promptEl.value="";
-  addMsg("user",text);
-  sendBtn.disabled=true;
-
-  // /image command
-  if(text.startsWith("/image")){
-    const imgPrompt=text.replace("/image","").trim();
-    generateImage(imgPrompt);
-    addMsg("assistant",`⏳ Bild wird generiert: "${imgPrompt}"`);
-    sendBtn.disabled=false;
-    return;
+  function addMsg(role,text){
+    const div=document.createElement("div");
+    div.className="msg";
+    div.innerHTML=`<span class="${role}">${role==="user"?"Du":"Bot"}:</span> ${text}`;
+    log.appendChild(div);
+    log.scrollTop=log.scrollHeight;
   }
 
-  // Normaler Chat
-  const replyChunks=[];
-  await engine.chat.completions.create({
-    messages:[...chatHistory,{role:"user",content:text}],
-    stream:true
-  }).then(async stream=>{
-    for await(const part of stream){
-      const delta=part.choices[0]?.delta?.content||"";
-      if(delta){
-        replyChunks.push(delta);
-        addOrUpdateAssistant(replyChunks.join(""));
-      }
+  async function initModel(){
+    const modelId=modelSel.value;
+    addMsg("assistant",`⏳ Lade Base-Modell: ${modelId} ...`);
+    engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:info=>console.log("Init:",info)});
+    chatHistory=[];
+    addMsg("assistant",`✅ Modell "${modelId}" bereit!`);
+  }
+
+  modelSel.addEventListener("change",()=>initModel());
+  initModel();
+
+  form.addEventListener("submit", async e=>{
+    e.preventDefault(); // <- verhindert Page-Reload
+    const text=promptEl.value.trim();
+    if(!text||!engine) return;
+    promptEl.value="";
+    addMsg("user",text);
+    sendBtn.disabled=true;
+
+    // /image command
+    if(text.startsWith("/image")){
+      const imgPrompt=text.replace("/image","").trim();
+      generateImage(imgPrompt);
+      addMsg("assistant",`⏳ Bild wird generiert: "${imgPrompt}"`);
+      sendBtn.disabled=false;
+      return;
     }
+
+    // Normaler Chat
+    const replyChunks=[];
+    await engine.chat.completions.create({
+      messages:[...chatHistory,{role:"user",content:text}],
+      stream:true
+    }).then(async stream=>{
+      for await(const part of stream){
+        const delta=part.choices[0]?.delta?.content||"";
+        if(delta){
+          replyChunks.push(delta);
+          addOrUpdateAssistant(replyChunks.join(""));
+        }
+      }
+    });
+    const fullReply=replyChunks.join("");
+    chatHistory.push({role:"user",content:text});
+    chatHistory.push({role:"assistant",content:fullReply});
+    sendBtn.disabled=false;
   });
-  const fullReply=replyChunks.join("");
-  chatHistory.push({role:"user",content:text});
-  chatHistory.push({role:"assistant",content:fullReply});
-  sendBtn.disabled=false;
+
+  function addOrUpdateAssistant(text){
+    let last=log.lastElementChild;
+    if(!last||!last.querySelector(".assistant")) addMsg("assistant",text);
+    else last.innerHTML=`<span class="assistant">Bot:</span> ${text}`;
+  }
+
+  // ---------------- Bildgenerator ----------------
+  const genBtn=document.getElementById("gen-image");
+  const imgPrompt=document.getElementById("image-prompt");
+  const imgOutput=document.getElementById("image-output");
+
+  let sdEngine;
+  async function initSD(){
+    sdEngine=await websd.CreateEngine("stable-diffusion-1.5-base",{progressCallback:info=>console.log("SD Init:",info)});
+  }
+  initSD();
+
+  genBtn.addEventListener("click",()=>{
+    const prompt=imgPrompt.value.trim();
+    if(!prompt) return;
+    generateImage(prompt);
+  });
+
+  async function generateImage(prompt){
+    if(!sdEngine) return addMsg("assistant","❌ SD Engine nicht bereit");
+    const imgData = await sdEngine.generate({prompt,width:512,height:512,steps:20});
+    const imgEl = document.createElement("img");
+    imgEl.src = imgData;
+    imgOutput.prepend(imgEl);
+  }
+
 });
-
-function addOrUpdateAssistant(text){
-  let last=log.lastElementChild;
-  if(!last||!last.querySelector(".assistant")) addMsg("assistant",text);
-  else last.innerHTML=`<span class="assistant">Bot:</span> ${text}`;
-}
-
-// ---------------- Bildgenerator ----------------
-const genBtn=document.getElementById("gen-image");
-const imgPrompt=document.getElementById("image-prompt");
-const imgOutput=document.getElementById("image-output");
-
-let sdEngine;
-async function initSD(){
-  sdEngine=await websd.CreateEngine("stable-diffusion-1.5-base",{progressCallback:info=>console.log("SD Init:",info)});
-}
-initSD();
-
-genBtn.addEventListener("click",()=>{
-  const prompt=imgPrompt.value.trim();
-  if(!prompt) return;
-  generateImage(prompt);
-});
-
-async function generateImage(prompt){
-  if(!sdEngine) return addMsg("assistant","❌ SD Engine nicht bereit");
-  const imgData = await sdEngine.generate({prompt,width:512,height:512,steps:20});
-  const imgEl = document.createElement("img");
-  imgEl.src = imgData;
-  imgOutput.prepend(imgEl);
-}
 </script>
 
 </body>
