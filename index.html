@@ -1,125 +1,194 @@
 <!doctype html>
 <html lang="de">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>WebLLM Chatbot (frei & unmoderiert)</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 0; display: grid; grid-template-rows: auto 1fr auto; height: 100vh; background:#1e1e1e; color:#eee; }
-    header { padding: 12px 16px; box-shadow: 0 1px 0 rgba(0,0,0,.2); background: #2c2c2c; display:flex; justify-content:space-between; align-items:center; }
-    #log { padding: 16px; overflow-y: auto; background:#1b1b1b; flex:1; }
-    .msg { margin-bottom: 12px; }
-    .user { font-weight: bold; color: #00aaff; }
-    .assistant { font-weight: bold; color: #00ff88; }
-    form { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 12px 16px; border-top: 1px solid #333; background:#2c2c2c; }
-    textarea { resize: vertical; min-height: 60px; padding: 10px; border-radius: 6px; border:none; background:#333; color:#eee; }
-    button { padding: 10px 16px; border-radius: 8px; border: none; background: #00aaff; color: white; font-weight: bold; cursor: pointer; }
-    button:disabled { opacity: 0.6; cursor: wait; }
-  </style>
-  <script type="importmap">
-  {
-    "imports": {
-      "webllm": "https://esm.run/@mlc-ai/web-llm"
-    }
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>WebLLM + Freie Bildgeneration</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin:0; background:#1e1e1e; color:#eee; display:grid; grid-template-rows:auto 1fr auto; height:100vh;}
+  header { padding:12px 16px; display:flex; justify-content:space-between; align-items:center; background:#2c2c2c; }
+  #mode-select { padding:6px 12px; border-radius:6px; border:none; background:#444; color:#eee;}
+  main { padding:16px; overflow-y:auto; flex:1;}
+  .hidden { display:none; }
+  /* Chat UI */
+  #log { padding:0; overflow-y:auto; max-height:70vh; }
+  .msg { margin-bottom:12px; }
+  .user { font-weight:bold; color:#00aaff; }
+  .assistant { font-weight:bold; color:#00ff88; }
+  form { display:grid; grid-template-columns:1fr auto; gap:8px; margin-top:12px; }
+  textarea { resize:vertical; min-height:60px; padding:10px; border-radius:6px; border:none; background:#333; color:#eee; }
+  button { padding:10px 16px; border-radius:6px; border:none; background:#00aaff; color:#fff; cursor:pointer; font-weight:bold; }
+  button:disabled { opacity:0.6; cursor:wait; }
+  /* Bild UI */
+  #image-controls { display:grid; grid-template-columns:1fr auto; gap:8px; margin-top:12px; }
+  #image-output { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; }
+  #image-output img { max-width:100%; border-radius:8px; border:1px solid #444; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "webllm": "https://esm.run/@mlc-ai/web-llm",
+    "websd": "https://esm.run/@mlc-ai/web-sd"
   }
-  </script>
+}
+</script>
 </head>
 <body>
-  <header>
-    <strong>WebLLM Chatbot (frei & unmoderiert)</strong>
+
+<header>
+  <strong>Freier Chat & Bildgenerator</strong>
+  <select id="mode-select">
+    <option value="chat" selected>Chat</option>
+    <option value="image">Bildgeneration</option>
+  </select>
+</header>
+
+<main>
+  <!-- Chatbereich -->
+  <div id="chat-area">
+    <div id="log"></div>
+    <form id="composer">
+      <textarea id="prompt" placeholder="Frag mich etwas…" required></textarea>
+      <button id="send">Senden</button>
+    </form>
     <select id="model">
-      <option value="Llama-3-8B-Instruct-q4f16_1-MLC">Llama 3 8B (quantisiert)</option>
-      <option value="Phi-3-mini-4k-instruct-q4f16_1-MLC" selected>Phi-3 Mini (schneller, kleiner)</option>
-      <option value="Gemma-2-2B-it-q4f16_1-MLC">Gemma 2B (leichtgewichtig)</option>
+      <option value="Phi-3-mini-4k-instruct-q4f16_1-MLC" selected>Phi-3 Mini (klein & schnell)</option>
+      <option value="Llama-3-8B-Instruct-q4f16_1-MLC">Llama 3 8B</option>
     </select>
-  </header>
+  </div>
 
-  <main id="log"></main>
+  <!-- Bildbereich -->
+  <div id="image-area" class="hidden">
+    <div id="image-controls">
+      <textarea id="image-prompt" placeholder="Bildbeschreibung…"></textarea>
+      <button id="gen-image">Bild generieren</button>
+    </div>
+    <div id="image-output"></div>
+    <select id="image-model">
+      <option value="stable-diffusion-1.5-base" selected>Stable Diffusion 1.5</option>
+      <option value="stable-diffusion-2-base">Stable Diffusion 2.0</option>
+    </select>
+  </div>
+</main>
 
-  <form id="composer">
-    <textarea id="prompt" placeholder="Frag mich etwas…" required></textarea>
-    <button id="send">Senden</button>
-  </form>
+<script type="module">
+import * as webllm from "webllm";
+import * as websd from "websd";
 
-  <script type="module">
-    import * as webllm from "webllm";
+/* --- Elemente --- */
+const modeSelect = document.getElementById("mode-select");
+const chatArea = document.getElementById("chat-area");
+const imageArea = document.getElementById("image-area");
 
-    const log = document.getElementById("log");
-    const form = document.getElementById("composer");
-    const promptEl = document.getElementById("prompt");
-    const modelSel = document.getElementById("model");
-    const sendBtn = document.getElementById("send");
+/* --- Chat Variablen --- */
+const log = document.getElementById("log");
+const form = document.getElementById("composer");
+const promptEl = document.getElementById("prompt");
+const sendBtn = document.getElementById("send");
+const modelSel = document.getElementById("model");
+let engine;
+let chatHistory = [];
 
-    let engine;
-    let chatHistory = [];
+/* --- Bild Variablen --- */
+const imgPromptEl = document.getElementById("image-prompt");
+const genBtn = document.getElementById("gen-image");
+const imgOutput = document.getElementById("image-output");
+const imageModelSel = document.getElementById("image-model");
+let sdEngine;
 
-    function addMsg(role, text) {
-      const div = document.createElement("div");
-      div.className = "msg";
-      div.innerHTML = `<span class="${role}">${role === "user" ? "Du" : "Bot"}:</span> ${text}`;
-      log.appendChild(div);
-      log.scrollTop = log.scrollHeight;
-    }
+/* --- Mode Switching --- */
+modeSelect.addEventListener("change",()=>{
+  if(modeSelect.value==="chat"){
+    chatArea.classList.remove("hidden");
+    imageArea.classList.add("hidden");
+    if(!engine) initModel();
+  } else {
+    chatArea.classList.add("hidden");
+    imageArea.classList.remove("hidden");
+    if(!sdEngine) initSD();
+  }
+});
 
-    function addOrUpdateAssistant(text){
-      let last = log.lastElementChild;
-      if(!last || !last.querySelector(".assistant")){
-        addMsg("assistant", text);
-      } else {
-        last.innerHTML = `<span class="assistant">Bot:</span> ${text}`;
-      }
-      log.scrollTop = log.scrollHeight;
-    }
-
-    async function initModel() {
-      const modelId = modelSel.value;
-      addMsg("assistant", `⏳ Lade Modell: ${modelId} …`);
-      try {
-        engine = await webllm.CreateMLCEngine(modelId, { initProgressCallback: info => console.log("Init:",info) });
-        chatHistory = [];
-        addMsg("assistant", `✅ Modell "${modelId}" bereit!`);
-      } catch(e){
-        addMsg("assistant", "❌ Fehler beim Laden: " + e.message);
-      }
-    }
-
-    modelSel.addEventListener("change", ()=>initModel());
-    initModel();
-
-    async function sendChatMessage(text){
-      addMsg("user", text);
-      sendBtn.disabled = true;
-      try{
-        const replyChunks = [];
-        const stream = await engine.chat.completions.create({
-          messages: [...chatHistory, { role:"user", content:text }],
-          stream: true
-        });
-        for await(const part of stream){
-          const delta = part.choices[0]?.delta?.content;
-          if(delta){
-            replyChunks.push(delta);
-            addOrUpdateAssistant(replyChunks.join(""));
-          }
-        }
-        const fullReply = replyChunks.join("");
-        chatHistory.push({ role:"user", content:text });
-        chatHistory.push({ role:"assistant", content:fullReply });
-      }catch(e){
-        addMsg("assistant", "❌ Fehler: " + e.message);
-      }finally{
-        sendBtn.disabled = false;
-      }
-    }
-
-    form.addEventListener("submit", async e=>{
-      e.preventDefault();
-      const text = promptEl.value.trim();
-      if(!text || !engine) return;
-      promptEl.value="";
-      await sendChatMessage(text);
+/* --- Chat Funktionen --- */
+function addMsg(role,text){
+  const div=document.createElement("div");
+  div.className="msg";
+  div.innerHTML=`<span class="${role}">${role==="user"?"Du":"Bot"}:</span> ${text}`;
+  log.appendChild(div);
+  log.scrollTop=log.scrollHeight;
+}
+function addOrUpdateAssistant(text){
+  let last=log.lastElementChild;
+  if(!last||!last.querySelector(".assistant")) addMsg("assistant",text);
+  else last.innerHTML=`<span class="assistant">Bot:</span> ${text}`;
+  log.scrollTop=log.scrollHeight;
+}
+async function initModel(){
+  const modelId=modelSel.value;
+  addMsg("assistant",`⏳ Lade Modell: ${modelId} …`);
+  try{
+    engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:info=>console.log("Init:",info)});
+    chatHistory=[];
+    addMsg("assistant",`✅ Modell "${modelId}" bereit!`);
+  }catch(e){
+    addMsg("assistant","❌ Fehler beim Laden: "+e.message);
+  }
+}
+modelSel.addEventListener("change",()=>initModel());
+async function sendChatMessage(text){
+  addMsg("user",text);
+  sendBtn.disabled=true;
+  try{
+    const replyChunks=[];
+    const stream=await engine.chat.completions.create({
+      messages:[...chatHistory,{role:"user",content:text}],
+      stream:true
     });
+    for await(const part of stream){
+      const delta=part.choices[0]?.delta?.content;
+      if(delta){
+        replyChunks.push(delta);
+        addOrUpdateAssistant(replyChunks.join(""));
+      }
+    }
+    const fullReply=replyChunks.join("");
+    chatHistory.push({role:"user",content:text});
+    chatHistory.push({role:"assistant",content:fullReply});
+  }catch(e){
+    addMsg("assistant","❌ Fehler: "+e.message);
+  }finally{
+    sendBtn.disabled=false;
+  }
+}
+form.addEventListener("submit",async e=>{
+  e.preventDefault();
+  const text=promptEl.value.trim();
+  if(!text||!engine) return;
+  promptEl.value="";
+  await sendChatMessage(text);
+});
 
-  </script>
+/* --- Bild Funktionen --- */
+async function initSD(){
+  try{
+    sdEngine=await websd.CreateEngine(imageModelSel.value,{progressCallback:info=>console.log("SD Init:",info)});
+    console.log("SD Engine bereit!");
+  }catch(e){
+    console.error("Fehler beim Laden SD:",e);
+  }
+}
+genBtn.addEventListener("click",async()=>{
+  const prompt=imgPromptEl.value.trim();
+  if(!prompt||!sdEngine) return;
+  try{
+    const imgData=await sdEngine.generate({prompt,width:512,height:512,steps:20});
+    const imgEl=document.createElement("img");
+    imgEl.src=imgData;
+    imgOutput.prepend(imgEl);
+  }catch(e){
+    console.error("Fehler beim Generieren:",e);
+  }
+});
+</script>
 </body>
 </html>
