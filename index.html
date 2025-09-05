@@ -40,8 +40,8 @@
   <div>
     Chat-Modell:
     <select id="model">
+      <option value="Phi-3-mini-Base-4k-MLC" selected>Phi-3 Mini Base</option>
       <option value="Llama-3-7B-Base-MLC">Llama 3 7B Base</option>
-      <option value="Phi-3-mini-Base-4k-MLC">Phi-3 Mini Base</option>
     </select>
   </div>
 </header>
@@ -77,7 +77,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const form = document.getElementById("composer");
   const promptEl = document.getElementById("prompt");
   const modelSel = document.getElementById("model");
-  const sendBtn = document.getElementById("send");
+  const sendBtn = form.querySelector("button[type='submit']");
 
   let engine;
   let chatHistory=[];
@@ -93,56 +93,68 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function initModel(){
     const modelId=modelSel.value;
     addMsg("assistant",`⏳ Lade Base-Modell: ${modelId} ...`);
-    engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:info=>console.log("Init:",info)});
-    chatHistory=[];
-    addMsg("assistant",`✅ Modell "${modelId}" bereit!`);
+    try {
+      engine=await webllm.CreateMLCEngine(modelId,{initProgressCallback:info=>console.log("Init:",info)});
+      chatHistory=[];
+      addMsg("assistant",`✅ Modell "${modelId}" bereit!`);
+    } catch(e){
+      addMsg("assistant",`❌ Fehler beim Laden: ${e.message}`);
+    }
   }
 
   modelSel.addEventListener("change",()=>initModel());
-  initModel();
+  await initModel();
 
-  form.addEventListener("submit", async e=>{
-    e.preventDefault(); // <- verhindert Page-Reload
-    const text=promptEl.value.trim();
-    if(!text||!engine) return;
-    promptEl.value="";
-    addMsg("user",text);
-    sendBtn.disabled=true;
+  async function sendChatMessage(text){
+    addMsg("user", text);
+    sendBtn.disabled = true;
 
-    // /image command
-    if(text.startsWith("/image")){
-      const imgPrompt=text.replace("/image","").trim();
-      generateImage(imgPrompt);
-      addMsg("assistant",`⏳ Bild wird generiert: "${imgPrompt}"`);
-      sendBtn.disabled=false;
-      return;
-    }
+    try {
+      const replyChunks = [];
+      const stream = await engine.chat.completions.create({
+        messages: [...chatHistory, {role:"user", content:text}],
+        stream: true
+      });
 
-    // Normaler Chat
-    const replyChunks=[];
-    await engine.chat.completions.create({
-      messages:[...chatHistory,{role:"user",content:text}],
-      stream:true
-    }).then(async stream=>{
-      for await(const part of stream){
-        const delta=part.choices[0]?.delta?.content||"";
+      for await (const part of stream){
+        const delta = part.choices[0]?.delta?.content;
         if(delta){
           replyChunks.push(delta);
           addOrUpdateAssistant(replyChunks.join(""));
         }
       }
-    });
-    const fullReply=replyChunks.join("");
-    chatHistory.push({role:"user",content:text});
-    chatHistory.push({role:"assistant",content:fullReply});
-    sendBtn.disabled=false;
-  });
+
+      const fullReply = replyChunks.join("");
+      chatHistory.push({role:"user", content:text});
+      chatHistory.push({role:"assistant", content:fullReply});
+    } catch(e){
+      addMsg("assistant","❌ Fehler beim Modell: " + e.message);
+    } finally {
+      sendBtn.disabled = false;
+    }
+  }
 
   function addOrUpdateAssistant(text){
     let last=log.lastElementChild;
     if(!last||!last.querySelector(".assistant")) addMsg("assistant",text);
     else last.innerHTML=`<span class="assistant">Bot:</span> ${text}`;
   }
+
+  // ---------------- Event Listener Chat ----------------
+  form.addEventListener("submit", async e=>{
+    e.preventDefault(); // verhindert Page-Reload
+    const text = promptEl.value.trim();
+    if(!text || !engine) return;
+    promptEl.value="";
+
+    if(text.startsWith("/image")){
+      generateImage(text.replace("/image","").trim());
+      addMsg("assistant",`⏳ Bild wird generiert`);
+      return;
+    }
+
+    await sendChatMessage(text);
+  });
 
   // ---------------- Bildgenerator ----------------
   const genBtn=document.getElementById("gen-image");
@@ -151,9 +163,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   let sdEngine;
   async function initSD(){
-    sdEngine=await websd.CreateEngine("stable-diffusion-1.5-base",{progressCallback:info=>console.log("SD Init:",info)});
+    try {
+      sdEngine=await websd.CreateEngine("stable-diffusion-1.5-base",{progressCallback:info=>console.log("SD Init:",info)});
+    } catch(e){
+      addMsg("assistant","❌ Fehler beim Laden von SD: "+e.message);
+    }
   }
-  initSD();
+  await initSD();
 
   genBtn.addEventListener("click",()=>{
     const prompt=imgPrompt.value.trim();
@@ -163,10 +179,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function generateImage(prompt){
     if(!sdEngine) return addMsg("assistant","❌ SD Engine nicht bereit");
-    const imgData = await sdEngine.generate({prompt,width:512,height:512,steps:20});
-    const imgEl = document.createElement("img");
-    imgEl.src = imgData;
-    imgOutput.prepend(imgEl);
+    try{
+      const imgData = await sdEngine.generate({prompt,width:512,height:512,steps:20});
+      const imgEl = document.createElement("img");
+      imgEl.src = imgData;
+      imgOutput.prepend(imgEl);
+    } catch(e){
+      addMsg("assistant","❌ Fehler beim Generieren des Bildes: "+e.message);
+    }
   }
 
 });
